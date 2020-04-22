@@ -93,3 +93,73 @@ class PolynomialFeatures():
     def fit_transform(self, x):
         self = self.fit(x)
         return self.transform(x)
+    
+    
+
+class DateExploder():
+
+    def __init__(self, freq='1D', unit=None, other_str=False, first=True, last=True):
+        self.freq = freq
+        self.unit = unit
+        self.other_str = other_str
+        self.first = int(not first)
+        self.last = last
+    
+    
+    def _check(self, array):
+        if array.__class__ == np.ndarray and array.shape[1] > 1:
+            array = pd.DataFrame(x)
+        if array.__class__ != pd.DataFrame:
+            raise ValueError("Type is not supported")
+        
+        for col in self.date_cols:
+            try:
+                array[col] = pd.to_datetime(array[col], unit=self.unit)
+            except ValueError:
+                raise ValueError("Incorrect date cols")
+        return array
+
+
+    def transform(self, array, from_date=None, to_date=None, other=None):
+        self.date_cols = [to_date, from_date]
+        if other:
+            if isinstance(other, list):
+                self.other = other
+            else:
+                self.other = [other]
+
+        if not from_date or not to_date:
+            raise ValueError("Enter the date cols")
+        if isinstance(from_date, list) or isinstance(to_date, list):
+            raise ValueError("Enter date col, not list")
+
+        res_array = self._check(array).copy()
+        if self.last:
+            res_array['date_list'] = res_array[self.date_cols].apply(lambda date: pd.date_range(date[1], date[0], freq=self.freq).tolist()[self.first:], axis=1)
+        else:
+            res_array['date_list'] = res_array[self.date_cols].apply(lambda date: pd.date_range(date[1], date[0], freq=self.freq).tolist()[self.first: -1], axis=1)
+
+        res_array = res_array.drop(self.date_cols, axis=1)
+
+        if not other:
+            res_array = res_array.explode('date_list').rename(columns={'date_list':'date'}).reset_index(drop=True)
+        else:
+            if self.other_str:
+                for col in self.other:
+                    res_array[col] = res_array[col].apply(lambda x: ast.literal_eval(x) if not isinstance(x, list) else x)
+                    
+            if res_array['date_list'].apply(lambda x: len(x)).mean() == res_array[self.other].applymap(lambda x: len(x)).mean().mean():
+                res_array = res_array.apply(pd.Series.explode).rename(columns={'date_list':'date'}).reset_index(drop=True)
+            else:
+                res_array['duration'] = res_array['date_list'].apply(lambda x: len(x))
+                
+                for col in self.other:
+                    res_array[col] = res_array[[col] + ['duration']].apply(lambda cols: cols[0] + [np.nan] * (cols[1] - len(cols[0])), axis=1)
+                res_array = res_array.drop('duration', axis=1)
+
+                if res_array['date_list'].apply(lambda x: len(x)).mean() == res_array[self.other].applymap(lambda x: len(x)).mean().mean():
+                    res_array = res_array.apply(pd.Series.explode).rename(columns={'date_list':'date'}).reset_index(drop=True)
+                else:
+                    raise ValueError("Other values has higher length then date range")
+        
+        return res_array
