@@ -174,7 +174,7 @@ class GeoSeparation():
         self.dim = dim
         self.distance = distance
         self.d0_max = None
-        self.y = None
+        self.ys = None
 
 
     def _check(self, x, y=False):
