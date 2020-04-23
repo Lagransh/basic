@@ -60,7 +60,7 @@ class PolynomialFeatures():
         if x.shape[1] != self.n_features:
             raise ValueError("X shape does not match training shape")
 
-        res_array = array
+        res_array = np.copy(array)
 
         for deg in range(2, self.degree + 1):
             res_array = np.concatenate([res_array, array ** deg], axis=1)
@@ -163,3 +163,121 @@ class DateExploder():
                     raise ValueError("Other values has higher length then date range")
         
         return res_array
+    
+    
+
+class GeoSeparation():
+
+    def __init__(self, d0_squares=5, d1_squares=5, d2_squares=None, n_regions=None, dim=2, distance=False):
+        self.d_squares = (d0_squares, d1_squares, d2_squares)
+        self.n_regions = n_regions
+        self.dim = dim
+        self.distance = distance
+        self.d0_max = None
+        self.y = None
+
+
+    def _check(self, x, y=False):
+        if x.__class__ in [pd.DataFrame, pd.Series]:
+            x = x.values
+        if isinstance(x, list):
+            x = np.array([x]) if not y else np.c_[x]
+        if x.__class__ == np.ndarray:
+            if not y and x.shape[1] != self.dim:
+                raise ValueError("X must be {}-dimensional".format(self.dim))
+            if y and x.shape[1] > 1:
+                raise ValueError("Multi-Y is not supported")
+            return x
+        else:
+            raise ValueError("Type is not supported")
+
+
+    def fit(self, x, y=None):
+        x = self._check(x)
+        self.d0_max, self.d0_min = x[:, 0].max(), x[:, 0].min()
+        self.d1_max, self.d1_min = x[:, 1].max(), x[:, 1].min()
+        self.d2_max, self.d2_min = (x[:, 2].max(), x[:, 2].min()) if self.dim == 3 else None, None
+        self.feature_names = ['d0_square','d1_square']
+        self.feature_names += ['d2_square'] if self.dim == 3 else []
+        self.feature_names += ['square']
+
+        if self.n_regions:
+            from sklearn.cluster import KMeans
+            from sklearn.neighbors import NearestNeighbors as NN
+
+            self.cluster = KMeans(n_clusters=self.n_regions).fit(x)
+            self.feature_names += ['region']
+
+            if self.distance:
+              nn = {}
+              clusters = np.c_[self.cluster.predict(x)]
+              for i in range(self.n_regions):
+                  if np.where(clusters == i)[0].shape[0] > 1:
+                      self.feature_names += ['nearest_dist_to_' + str(i) + '_region']
+                      nn[i] = NN(n_neighbors=2).fit(x[np.where(clusters == i)[0]])
+                  else:
+                      nn[i] = None
+              self.nn = nn
+
+        if y is not None:
+            from sklearn.neighbors import NearestNeighbors as NN
+
+            y = self._check(y, y=True)
+            if np.unique(y).shape[0] > 15:
+                raise ValueError("Y can use only for classification where nunique count less than 15")
+            
+            ys = {}
+            for i, val in enumerate(np.unique(y)):
+                if np.where(y == val)[0].shape[0] > 1:
+                    self.feature_names += ['nearest_dist_to_' + str(val) + '_y']
+                    ys[i] = NN(n_neighbors=2).fit(x[np.where(y == val)[0]])
+                else:
+                    ys[i] = None
+            self.ys = ys
+          
+        return self
+
+
+    def transform(self, x):
+        x = self._check(x)
+        if not self.d0_max:
+            raise ValueError("Didn't fit yet")
+
+        d0_len = self.d0_max - self.d0_min
+        d1_len = self.d1_max - self.d1_min
+        d2_len = (self.d2_max - self.d2_min) if self.dim == 3 else None
+
+        res_array = np.copy(x)
+        res_array[:, 0] = (x[:, 0] - self.d0_min) // (d0_len / self.d_squares[0])
+        res_array[:, 1] = (x[:, 1] - self.d1_min) // (d1_len / self.d_squares[1])
+        if self.dim == 3:
+            res_array[:, 2] = (x[:, 2] - self.d2_min) // (d2_len / self.d_squares[2])
+            square = res_array[:, [0]] * self.d_squares[1] + res_array[:, [1]] * self.d_squares[2] + res_array[:, [2]]
+        else:
+            square = res_array[:, [0]] * self.d_squares[1] + res_array[:, [1]]
+
+        res_array = np.concatenate([res_array, square], axis=1)
+
+        if self.n_regions:
+            res_array = np.concatenate([res_array, np.c_[self.cluster.predict(x)]], axis=1)
+
+            if self.distance:
+                for key in self.nn.keys():
+                    if self.nn[key]:
+                        res_array = np.concatenate([res_array, self.nn[key].kneighbors(x)[0][:, [1]]], axis=1)
+                
+        if self.ys:
+            for key in self.ys.keys():
+                if self.ys[key]:
+                    res_array = np.concatenate([res_array, self.ys[key].kneighbors(x)[0][:, [1]]], axis=1)
+        
+        return res_array
+
+
+    def fit_transform(self, x, y=None):
+        self = self.fit(x, y=y)
+        return self.transform(x)
+
+    
+    def get_features_names(self):
+        return self.feature_names
