@@ -2,100 +2,6 @@ import pandas as pd
 import numpy as np
 import ast
 
-class PolynomialFeatures():
-
-    def __init__(self, degree=1, interactions=True, multi_degree=False, exp=False, obj_func=None):
-        self.degree = degree
-        self.interactions = interactions
-        self.obj_func = obj_func
-        self.exp = exp
-        self.multi_degree = multi_degree
-        self.n_features = None
-
-
-    def _check(self, x):
-        if x.__class__ in [pd.DataFrame, pd.Series]:
-            x = x.values
-        if isinstance(x, list):
-            x = np.array([x])
-        if x.__class__ == np.ndarray:
-            return x
-        else:
-            raise ValueError("Type is not supported")
-
-
-    def fit(self, x, y=None):
-        x = self._check(x)
-        num_cols = []
-        cat_cols = []
-        for col in range(x.shape[1]):
-            try:
-                x[:, col].astype(np.number)
-                num_cols.append(col)
-            except ValueError:
-                cat_cols.append(col)
-        self.n_features = x.shape[1]
-        self.num_cols = num_cols
-        self.cat_cols = cat_cols
-        if self.obj_func:
-            self.preprocess(x[:, cat_cols])
-        else:
-            self.obj_model = None
-        return self
-
-
-    def preprocess(self, array):
-          if self.obj_func == 'one_hot':
-              from sklearn.preprocessing import OneHotEncoder as OHE
-              self.obj_model = OHE(handle_unknown='ignore', sparse=False).fit(array)
-          return self
-
-    
-    def transform(self, x):
-        if not self.n_features:
-            raise ValueError("Is not trained")
-
-        x = self._check(x)
-        array = x[:, self.num_cols]
-        if x.shape[1] != self.n_features:
-            raise ValueError("X shape does not match training shape")
-
-        res_array = np.copy(array)
-
-        for deg in range(2, self.degree + 1):
-            res_array = np.concatenate([res_array, array ** deg], axis=1)
-
-        for mult_col in range(2 * self.degree):
-            for loc in range(0, self.degree - mult_col - 1):
-                res_array = np.concatenate([res_array, res_array[:, [mult_col]] * res_array[:, mult_col + array.shape[1] * loc + 1: mult_col + array.shape[1] * (loc + 1)]], axis=1)
-
-        if self.interactions == False:
-            res_array = np.concatenate([res_array[:, :array.shape[1]], res_array[:, array.shape[1] * self.degree:]], axis=1)
-        
-        if self.multi_degree:
-            multi_array = array
-            for mult_col in range(array.shape[1]):
-                if array[:, mult_col].min() > 0.001 and array[:, mult_col].max() < 32:
-                    other_cols = [e for e in range(array.shape[1])]
-                    other_cols.remove(mult_col)
-                    multi_array = np.concatenate([multi_array, array[:, other_cols] ** array[:, [mult_col]]], axis=1)
-            res_array = np.concatenate([res_array, multi_array[:, array.shape[1]:]], axis=1)
-        
-        if self.exp:
-            res_array = np.concatenate([res_array, np.log(array.astype(np.float32)), np.exp(array.astype(np.float32))], axis=1)
-
-        if self.obj_model:
-            res_array = np.concatenate([res_array, self.obj_model.transform(x[:, self.cat_cols])], axis=1)
-
-        return res_array
-
-
-    def fit_transform(self, x):
-        self = self.fit(x)
-        return self.transform(x)
-    
-    
-
 class DateExploder():
 
     def __init__(self, freq='1D', unit=None, other_str=False, first=True, last=True):
@@ -281,3 +187,106 @@ class GeoSeparation():
     
     def get_features_names(self):
         return self.feature_names
+    
+    
+class CrossFeatures():
+    
+    def __init__(self, cat_cols=None, float_cols=None, relative=False, multi_groups=None, func='mean', split_size=2):
+        self.cat_cols = cat_cols
+        self.float_cols = float_cols
+        self.relative = relative
+        self.multi_groups = multi_groups
+        self.func = func
+        self.split_size = split_size
+        
+    
+    def fit(self, x):
+        if not self.cat_cols:
+            self.cat_cols = x.dtypes[x.dtypes == 'O'].index
+        if not self.float_cols:
+            self.float_cols = x.dtypes[x.dtypes.isin(['float32', 'float64', 'int16', 'int32'])].index.tolist()
+        
+        if self.multi_groups:
+            from itertools import combinations
+            self.combinations = combinations(cat_cols, self.multi_groups)
+        else:
+            self.combinations = self.cat_cols
+        
+        self.groups = {}
+        indices = x.index
+        split_len = x.shape[0] // self.split_size
+        
+        for i in range(self.split_size - 1):
+            self.groups[i] = np.random.choice(indices, size=split_len,replace=False).tolist()
+            indices = list(set(indices) - set(self.groups[i]))
+        self.groups[self.split_size - 1] = indices
+             
+        self.grouped_data = {}
+        for i in range(self.split_size):
+            x_local = x.loc[self.groups[i]]
+            self._save_groupby(x_local, str(i))
+            
+        self._save_groupby(x, 'total')
+        return self
+        
+        
+    def _save_groupby(self, x, suffix):
+        for comb in self.combinations:
+            key = list(comb) if isinstance(comb, tuple) else [comb]
+            for float_col in self.float_cols:
+                self.grouped_data['/'.join(key) + '_' + float_col + suffix] = x.groupby(key)[float_col]
+    
+    
+    def transform(self, x, total=True):
+        if not total:
+            groups = list(self.groups.keys())
+            
+            for i in range(self.split_size):
+                ind = self.groups[i]
+                random_choice = np.random.choice(groups, size=1)[0]
+                groups = list(set(groups) - set([random_choice]))
+                
+                self.feature_names = []
+                for comb in self.combinations:
+                    key = list(comb) if isinstance(comb, tuple) else [comb]
+                    for float_col in self.float_cols:
+                        name = '/'.join(key) + '_' + float_col
+                        x.loc[ind, name] = self.grouped_data[name + str(random_choice)].transform(self.func)
+                        self.feature_names.append(name)
+                        
+                        if self.relative:
+                            x.loc[ind, float_col] /= x.loc[ind, name]
+                            
+                if self.relative:
+                    x = x.drop(self.feature_names, axis=1)
+                            
+        else:
+            self.feature_names = []
+            for comb in self.combinations:
+                key = list(comb) if isinstance(comb, tuple) else [comb]
+                for float_col in self.float_cols:
+                    name = '/'.join(key) + '_' + float_col
+                    merge_data = self.grouped_data[name + 'total'].agg(self.func).reset_index().rename(columns={float_col: name})
+                    self.feature_names.append(name)
+                    
+                    x = x.merge(merge_data, how='left', on=list(key))
+                    if self.relative:
+                        x[float_col] /= x[name]
+                        
+            if self.relative:
+                x = x.drop(self.feature_names, axis=1)
+        
+        return x
+                        
+                    
+    def fit_transform(self, x):
+        self = self.fit(x)
+        return self.transform(x, total=False)
+    
+    
+    def get_feature_names(self):
+        return self.feature_names
+    
+    
+    def get_combinations(self):
+        return self.combinations
