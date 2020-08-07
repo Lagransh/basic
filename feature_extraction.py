@@ -3,7 +3,12 @@ import numpy as np
 import ast
 
 class DateExploder():
-
+    """freq - explode date frequency(pandas freqs)
+       unit - date unit frequency(pandas units)
+       other_str - other columns to explode with date in string format
+       first - use first date in date range when date explode
+       last - use last date in date range when date explode"""
+    
     def __init__(self, freq='1D', unit=None, other_str=False, first=True, last=True):
         self.freq = freq
         self.unit = unit
@@ -73,6 +78,12 @@ class DateExploder():
     
 
 class GeoSeparation():
+    """d0_squres - squares in 0 axis
+       d1_squares - squares in 1 axis
+       d2_squares - squares in 2 axis(only when dim=3)
+       dim - axis count
+       n_regions - regions count to group points
+       distance - return distance between regions(only when n_regions)"""
 
     def __init__(self, d0_squares=5, d1_squares=5, d2_squares=None, n_regions=None, dim=2, distance=False):
         self.d_squares = (d0_squares, d1_squares, d2_squares)
@@ -190,6 +201,12 @@ class GeoSeparation():
     
     
 class CrossFeatures():
+    """cat_cols - list of cat cols to use
+       float_cols - list of float cols to use
+       relative - change current absolute values to groupby relative
+       multi_groups - count of cat_cols to use on each groupby
+       func - func to aggregate on groupby
+       split_size - count of data splits to cross generate"""
     
     def __init__(self, cat_cols=None, float_cols=None, relative=False, multi_groups=None, func='mean', split_size=2):
         self.cat_cols = cat_cols
