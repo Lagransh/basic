@@ -206,15 +206,17 @@ class CrossFeatures():
        relative - change current absolute values to groupby relative
        multi_groups - count of cat_cols to use on each groupby
        func - func to aggregate on groupby
-       split_size - count of data splits to cross generate"""
+       split_size - count of data splits to cross generate
+       rewrite - rewrite float cols values(only if relative)"""
     
-    def __init__(self, cat_cols=None, float_cols=None, relative=False, multi_groups=None, func='mean', split_size=2):
+    def __init__(self, cat_cols=None, float_cols=None, relative=False, multi_groups=None, func='mean', split_size=2, rewrite=False):
         self.cat_cols = cat_cols
         self.float_cols = float_cols
         self.relative = relative
         self.multi_groups = multi_groups
         self.func = func
         self.split_size = split_size
+        self.rewrite = rewrite
         
     
     def fit(self, x):
@@ -249,9 +251,24 @@ class CrossFeatures():
         
     def _save_groupby(self, x, suffix):
         for comb in self.combinations:
-            key = list(comb) if isinstance(comb, tuple) else [comb]
+            key = self._check_tuple(comb)
             for float_col in self.float_cols:
-                self.grouped_data['/'.join(key) + '_' + float_col + suffix] = x.groupby(key)[float_col]
+                name = self._get_name(key, float_col)
+                self.grouped_data[name + suffix] = x.groupby(key)[float_col]
+               
+            
+    def _check_tuple(self, key):
+        return list(key) if isinstance(key, tuple) else [key]
+    
+    
+    def _get_name(self, key, float_col):
+        return '/'.join(key) + '_' + float_col
+    
+    
+    def _drop_cols(self, x):
+        if self.relative and self.rewrite:
+            x = x.drop(self.feature_names, axis=1)
+        return x
     
     
     def transform(self, x, total=True):
@@ -265,34 +282,33 @@ class CrossFeatures():
                 
                 self.feature_names = []
                 for comb in self.combinations:
-                    key = list(comb) if isinstance(comb, tuple) else [comb]
+                    key = self._check_tuple(comb)
                     for float_col in self.float_cols:
-                        name = '/'.join(key) + '_' + float_col
-                        x.loc[ind, name] = self.grouped_data[name + str(random_choice)].transform(self.func)
+                        name = self._get_name(key, float_col)
+                        join_data = self.grouped_data[name + str(random_choice)].agg(self.func)
+                        join_data.index = ind
+                        join_data.name = name
+                        x = x.join(join_data)
                         self.feature_names.append(name)
-                        
-                        if self.relative:
-                            x.loc[ind, float_col] /= x.loc[ind, name]
-                            
-                if self.relative:
-                    x = x.drop(self.feature_names, axis=1)
                             
         else:
             self.feature_names = []
             for comb in self.combinations:
-                key = list(comb) if isinstance(comb, tuple) else [comb]
+                key = self._check_tuple(comb)
                 for float_col in self.float_cols:
-                    name = '/'.join(key) + '_' + float_col
+                    name = self._get_name(key, float_col)
                     merge_data = self.grouped_data[name + 'total'].agg(self.func).reset_index().rename(columns={float_col: name})
                     self.feature_names.append(name)
                     
                     x = x.merge(merge_data, how='left', on=list(key))
-                    if self.relative:
-                        x[float_col] /= x[name]
+                    
+        if self.relative:
+            if self.rewrite:
+                x[float_col] /= x[name]
+            else:
+                x[name] = x[float_col] / x[name]
                         
-            if self.relative:
-                x = x.drop(self.feature_names, axis=1)
-        
+        x = self._drop_cols(x)
         return x
                         
                     
