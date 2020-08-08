@@ -220,10 +220,11 @@ class CrossFeatures():
         
     
     def fit(self, x):
+        x.columns = [str(col) for col in x.columns.tolist()]
         if not self.cat_cols:
             self.cat_cols = x.dtypes[x.dtypes == 'O'].index
         if not self.float_cols:
-            self.float_cols = x.dtypes[x.dtypes.isin(['float32', 'float64', 'int16', 'int32'])].index.tolist()
+            self.float_cols = x.dtypes[x.dtypes == float].index.tolist()
         
         if self.multi_groups:
             from itertools import combinations
@@ -262,22 +263,33 @@ class CrossFeatures():
     
     
     def _get_name(self, key, float_col):
-        return '/'.join(key) + '_' + float_col
+        return '/'.join(key) + '_' + str(float_col)
     
     
     def _drop_cols(self, x):
         if self.relative and self.rewrite:
             x = x.drop(self.feature_names, axis=1)
         return x
+
+
+    def _gen_cols(self, x):
+        for comb in self.combinations:
+            key = self._check_tuple(comb)
+            for float_col in self.float_cols:
+                name = self._get_name(key, float_col)
+                x[name] = np.nan
     
     
     def transform(self, x, total=True):
+        x.columns = [str(col) for col in x.columns]
         if not total:
+            x = self._gen_cols(x)
+
             groups = list(self.groups.keys())
             
             for i in range(self.split_size):
                 ind = self.groups[i]
-                random_choice = np.random.choice(groups, size=1)[0]
+                random_choice = np.random.choice(list(set(groups) - {i}), size=1)[0]
                 groups = list(set(groups) - set([random_choice]))
                 
                 self.feature_names = []
@@ -285,10 +297,9 @@ class CrossFeatures():
                     key = self._check_tuple(comb)
                     for float_col in self.float_cols:
                         name = self._get_name(key, float_col)
-                        join_data = self.grouped_data[name + str(random_choice)].agg(self.func)
-                        join_data.index = ind
-                        join_data.name = name
-                        x = x.join(join_data)
+                        join_data = self.grouped_data[name + str(random_choice)].agg(self.func).reset_index()
+                        join_data = x.loc[ind].merge(join_data, how='left', on=key)
+                        x.loc[ind, name] = join_data[float_col + '_y'].values
                         self.feature_names.append(name)
                             
         else:
@@ -299,8 +310,8 @@ class CrossFeatures():
                     name = self._get_name(key, float_col)
                     merge_data = self.grouped_data[name + 'total'].agg(self.func).reset_index().rename(columns={float_col: name})
                     self.feature_names.append(name)
-                    
-                    x = x.merge(merge_data, how='left', on=list(key))
+
+                    x = x.merge(merge_data, how='left', on=key)
                     
         if self.relative:
             if self.rewrite:
