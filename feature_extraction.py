@@ -278,13 +278,15 @@ class CrossFeatures():
             for float_col in self.float_cols:
                 name = self._get_name(key, float_col)
                 x[name] = np.nan
+                return x # without it in line 287 one will be returned None
     
     
     def transform(self, x, total=True):
         x.columns = [str(col) for col in x.columns]
         if not total:
             x = self._gen_cols(x)
-
+            # print(x)
+            
             groups = list(self.groups.keys())
             
             for i in range(self.split_size):
